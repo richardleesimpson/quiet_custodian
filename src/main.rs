@@ -29,11 +29,11 @@ fn watch(source: PathBuf, destination: PathBuf) -> notify::Result<()> {
             Ok(event) => {
                 println!("Change: {event:?}");
                 for path in event.paths {
-                    let to = destination.join(path.file_name().unwrap());
-
-                    // TODO - Handle errors, but also multiple events for the same file
-                    // INFO - https://github.com/notify-rs/notify/issues/272
-                    rename(path, to);
+                    if path.exists() {
+                        let to = destination.join(path.file_name().unwrap());
+                        println!("Moving {path:?} to {to:?}");
+                        rename(path, to).unwrap();
+                    }
                 }
             }
             Err(error) => println!("Error: {error:?}"),
