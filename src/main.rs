@@ -1,31 +1,42 @@
-use std::{ env, path::{ Path, PathBuf } };
+use std::{ env, fs::{ rename }, path::PathBuf };
+
 use notify::{ Config, RecommendedWatcher, RecursiveMode, Watcher };
 
 fn main() {
     let args: Vec<String> = env::args().collect();
-    if args.len() < 2 {
-        eprintln!("Usage: {} <source_folder>", args[0]);
+    if args.len() < 3 {
+        eprintln!("Usage: {} <source_folder> <destination_folder>", args[0]);
         std::process::exit(1);
     }
 
     let source_folder = PathBuf::from(&args[1]);
+    let destination_folder = PathBuf::from(&args[2]);
 
     println!("The custodian is quietly listening to {source_folder:?} ...");
 
-    if let Err(error) = watch(source_folder) {
+    if let Err(error) = watch(source_folder, destination_folder) {
         eprintln!("Error: {error:?}");
     }
 }
 
-fn watch<P: AsRef<Path>>(path: P) -> notify::Result<()> {
+fn watch(source: PathBuf, destination: PathBuf) -> notify::Result<()> {
     let (tx, rx) = std::sync::mpsc::channel();
     let mut watcher = RecommendedWatcher::new(tx, Config::default())?;
-    watcher.watch(path.as_ref(), RecursiveMode::Recursive)?;
+    watcher.watch(&source, RecursiveMode::NonRecursive)?;
 
     for res in rx {
         match res {
-            Ok(event) => println!("Change: {event:?}"),
-            Err(error) => eprintln!("Error: {error:?}"),
+            Ok(event) => {
+                println!("Change: {event:?}");
+                for path in event.paths {
+                    let to = destination.join(path.file_name().unwrap());
+
+                    // TODO - Handle errors, but also multiple events for the same file
+                    // INFO - https://github.com/notify-rs/notify/issues/272
+                    rename(path, to);
+                }
+            }
+            Err(error) => println!("Error: {error:?}"),
         }
     }
 
