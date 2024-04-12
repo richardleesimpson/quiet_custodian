@@ -4,10 +4,11 @@ extern crate lazy_static;
 const INPUT_DATE_FORMAT: &str = "%y%m%d%H%M";
 const OUTPUT_DATE_FORMAT: &str = "%Y-%m-%d %H-%M";
 
-use std::{ env, fs::rename, path::PathBuf };
+use std::{ fs::rename, path::PathBuf };
 use chrono::NaiveDateTime;
 use notify::{ Config, RecommendedWatcher, RecursiveMode, Watcher };
 use regex::Regex;
+use clap::Parser;
 
 lazy_static! {
     static ref FILENAME_PATTERN: Regex = Regex::new(
@@ -15,19 +16,21 @@ lazy_static! {
     ).unwrap();
 }
 
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Cli {
+    #[arg(short, long, value_name = "INPUT_DIR", help = "Input directory", default_value = "./")]
+    input: PathBuf,
+    #[arg(short, long, value_name = "OUTPUT_DIR", help = "Output directory", default_value = "./")]
+    output: PathBuf,
+}
+
 fn main() {
-    let args: Vec<String> = env::args().collect();
-    if args.len() < 3 {
-        eprintln!("Usage: {} <source_folder> <destination_folder>", args[0]);
-        std::process::exit(1);
-    }
+    let cli: Cli = Cli::parse();
 
-    let source_folder = PathBuf::from(&args[1]);
-    let destination_folder = PathBuf::from(&args[2]);
+    println!("The custodian is quietly listening to {0:?} ...", cli.input);
 
-    println!("The custodian is quietly listening to {source_folder:?} ...");
-
-    if let Err(error) = watch(source_folder, destination_folder) {
+    if let Err(error) = watch(cli.input, cli.output) {
         eprintln!("Error: {error:?}");
     }
 }
@@ -50,7 +53,10 @@ fn watch(source: PathBuf, destination: PathBuf) -> notify::Result<()> {
                         if let Err(error) = std::fs::create_dir_all(&destination) {
                             eprintln!("Error: {error:?}");
                         }
-                        rename(path, to).unwrap();
+                        if let Err(error) = rename(path, to) {
+                            eprintln!("Error: {error:?}");
+                            continue;
+                        }
                     }
                 }
             }
