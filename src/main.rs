@@ -4,7 +4,7 @@ extern crate lazy_static;
 const INPUT_DATE_FORMAT: &str = "%y%m%d%H%M";
 const OUTPUT_DATE_FORMAT: &str = "%Y-%m-%d %H-%M";
 
-use std::{ fs::rename, path::{ Path, PathBuf } };
+use std::{ ffi::OsStr, fs::rename, path::{ Path, PathBuf } };
 use chrono::NaiveDateTime;
 use notify::{ Config, RecommendedWatcher, RecursiveMode, Watcher };
 use regex::Regex;
@@ -51,7 +51,7 @@ fn listen(input: PathBuf, output: PathBuf) -> notify::Result<()> {
                 for path in event.paths {
                     let file_name = path.file_name().unwrap().to_str().unwrap();
                     let is_match = FILENAME_PATTERN.is_match(file_name);
-                    if path.exists() && is_match {
+                    if path.exists() && is_match && is_supported_audio_format(path.as_path()) {
                         let to = output.join(reformat_filename(file_name));
                         if let Err(error) = transcribe_audio_file(&path, &to) {
                             eprintln!("Error transcribing audio: {error:?}");
@@ -94,4 +94,30 @@ fn transcribe_audio_file(input: &Path, output: &Path) -> Result<(), String> {
     // TODO: Actual call to audio processing library
     println!("Transcribing file from {:?} to {:?}", input, output);
     Ok(())
+}
+
+enum AudioFormat {
+    MP3,
+    MP4,
+}
+
+impl AudioFormat {
+    fn from_extension(ext: &str) -> Option<Self> {
+        match ext.to_lowercase().as_str() {
+            "mp3" => Some(Self::MP3),
+            "mp4" => Some(Self::MP4),
+            _ => None,
+        }
+    }
+
+    fn is_supported(ext: &str) -> bool {
+        Self::from_extension(ext).is_some()
+    }
+}
+
+fn is_supported_audio_format(path: &Path) -> bool {
+    path.extension()
+        .and_then(OsStr::to_str)
+        .map(|ext| AudioFormat::is_supported(ext))
+        .unwrap_or(false)
 }
