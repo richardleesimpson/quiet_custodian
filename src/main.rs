@@ -1,20 +1,7 @@
-#[macro_use]
-extern crate lazy_static;
-
-const INPUT_DATE_FORMAT: &str = "%y%m%d%H%M";
-const OUTPUT_DATE_FORMAT: &str = "%Y-%m-%d %H-%M";
-
-use std::{ ffi::OsStr, fs::rename, path::{ Path, PathBuf } };
-use chrono::NaiveDateTime;
+use std::{ ffi::OsStr, fs::{ metadata, rename }, path::{ Path, PathBuf } };
+use chrono::{ DateTime, Utc };
 use notify::{ Config, RecommendedWatcher, RecursiveMode, Watcher };
-use regex::Regex;
 use clap::Parser;
-
-lazy_static! {
-    static ref FILENAME_PATTERN: Regex = Regex::new(
-        r"R-\d{5}_(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})_REC(?i)\.mp3$"
-    ).unwrap();
-}
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -23,6 +10,14 @@ struct Cli {
     input: PathBuf,
     #[arg(short, long, value_name = "OUTPUT_DIR", help = "Output directory", default_value = "./")]
     output: PathBuf,
+    #[arg(
+        short = 'f',
+        long,
+        value_name = "OUTPUT_FORMAT",
+        help = "Output format",
+        default_value = "%Y-%m-%d %H-%M"
+    )]
+    output_format: String, // TODO: Rename this
 }
 
 fn main() {
@@ -30,12 +25,12 @@ fn main() {
 
     println!("The custodian is quietly listening to {0:?} ...", cli.input);
 
-    if let Err(error) = listen(cli.input, cli.output) {
+    if let Err(error) = listen(cli.input, cli.output, &cli.output_format) {
         eprintln!("Error listening: {error:?}");
     }
 }
 
-fn listen(input: PathBuf, output: PathBuf) -> notify::Result<()> {
+fn listen(input: PathBuf, output: PathBuf, output_format: &str) -> notify::Result<()> {
     if let Err(error) = std::fs::create_dir_all(&input) {
         eprintln!("Error creating source directory: {error:?}");
     }
@@ -49,10 +44,8 @@ fn listen(input: PathBuf, output: PathBuf) -> notify::Result<()> {
             Ok(event) => {
                 println!("Change: {event:?}");
                 for path in event.paths {
-                    let file_name = path.file_name().unwrap().to_str().unwrap();
-                    let is_match = FILENAME_PATTERN.is_match(file_name);
-                    if path.exists() && is_match && is_supported_audio_format(path.as_path()) {
-                        let to = output.join(reformat_filename(file_name));
+                    if path.exists() && is_supported_audio_format(path.as_path()) {
+                        let to = output.join(reformat_filename(&path, output_format));
                         if let Err(error) = transcribe_audio_file(&path, &to) {
                             eprintln!("Error transcribing audio: {error:?}");
                         }
@@ -74,19 +67,11 @@ fn listen(input: PathBuf, output: PathBuf) -> notify::Result<()> {
     Ok(())
 }
 
-fn reformat_filename(filename: &str) -> String {
-    println!("Reformatting filename: {filename}");
-    if let Some(caps) = FILENAME_PATTERN.captures(filename) {
-        let date_str = format!("{}{}{}{}{}", &caps[1], &caps[2], &caps[3], &caps[4], &caps[5]);
-
-        if let Ok(date_time) = NaiveDateTime::parse_from_str(&date_str, INPUT_DATE_FORMAT) {
-            format!("{}.mp3", date_time.format(OUTPUT_DATE_FORMAT))
-        } else {
-            eprintln!("Could not parse date from filename: {}", filename);
-            filename.to_string()
-        }
+fn reformat_filename(filename: &Path, output_format: &str) -> String {
+    if let Some(date_time) = get_file_date(filename) {
+        format!("{}.mp3", date_time.format(output_format))
     } else {
-        filename.to_string()
+        filename.to_str().unwrap().to_string()
     }
 }
 
@@ -120,4 +105,19 @@ fn is_supported_audio_format(path: &Path) -> bool {
         .and_then(OsStr::to_str)
         .map(|ext| AudioFormat::is_supported(ext))
         .unwrap_or(false)
+}
+
+fn get_file_date(path: &Path) -> Option<DateTime<Utc>> {
+    let meta = match metadata(path) {
+        Ok(meta) => meta,
+        Err(_) => {
+            return None;
+        }
+    };
+
+    let creation_date = meta.created().or_else(|_| meta.modified());
+    match creation_date {
+        Ok(system_time) => Some(DateTime::<Utc>::from(system_time)),
+        Err(_) => None,
+    }
 }
