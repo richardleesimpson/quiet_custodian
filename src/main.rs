@@ -2,24 +2,30 @@ use std::{ ffi::OsStr, fs::{ metadata, rename }, path::{ Path, PathBuf }, time::
 use chrono::{ DateTime, Local, Utc };
 use env_logger::Builder;
 use notify::{ Config, RecommendedWatcher, RecursiveMode, Watcher };
-use clap::Parser;
+use clap::{ ArgAction, Parser };
 use log::{ debug, error, info, LevelFilter };
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Cli {
-    #[arg(short, long, value_name = "INPUT_DIR", help = "Input directory", default_value = "./")]
+    #[arg(short, long, help = "Input directory", default_value = "./")]
     input: PathBuf,
-    #[arg(short, long, value_name = "OUTPUT_DIR", help = "Output directory", default_value = "./")]
+    #[arg(short, long, help = "Output directory", default_value = "./")]
     output: PathBuf,
     #[arg(
-        short = 'f',
+        short,
         long,
-        value_name = "OUTPUT_FORMAT",
-        help = "Output format",
-        default_value = "%Y%m%d%H%M%S"
+        help = "Replace filename. Cannot be used with --append-summary or --append-timestamp",
+        action = ArgAction::SetTrue,
+        conflicts_with_all = &["append_summary", "append_timestamp"]
     )]
-    output_format: String, // TODO: Rename this
+    replace_filename: bool,
+    #[arg(short = 's', long, help = "Append summary to filename", action = ArgAction::SetTrue)]
+    append_summary: bool,
+    #[arg(short = 't', long, help = "Append timestamp to filename", action = ArgAction::SetTrue)]
+    append_timestamp: bool,
+    #[arg(short = 'f', long, help = "Timestamp format", default_value = "%Y%m%d%H%M%S")]
+    timestamp_format: String,
     #[arg(
         short,
         long,
@@ -36,12 +42,28 @@ fn main() {
 
     info!("The custodian is quietly listening to {0:?} ...", cli.input);
 
-    if let Err(error) = listen(cli.input, cli.output, &cli.output_format) {
+    if
+        let Err(error) = listen(
+            cli.input,
+            cli.output,
+            cli.replace_filename,
+            cli.append_timestamp,
+            &cli.timestamp_format,
+            cli.append_summary
+        )
+    {
         error!("Error listening: {error:?}");
     }
 }
 
-fn listen(input: PathBuf, output: PathBuf, output_format: &str) -> notify::Result<()> {
+fn listen(
+    input: PathBuf,
+    output: PathBuf,
+    replace_filename: bool,
+    append_timestamp: bool,
+    timestamp_format: &str,
+    append_summary: bool
+) -> notify::Result<()> {
     if let Err(error) = std::fs::create_dir_all(&input) {
         error!("Error creating source directory: {error:?}");
     }
@@ -56,7 +78,15 @@ fn listen(input: PathBuf, output: PathBuf, output_format: &str) -> notify::Resul
                 debug!("Change: {event:?}");
                 for path in event.paths {
                     if path.exists() && is_supported_audio_format(path.as_path()) {
-                        let to = output.join(reformat_filename(&path, output_format));
+                        let to = output.join(
+                            reformat_filename(
+                                &path,
+                                replace_filename,
+                                append_timestamp,
+                                timestamp_format,
+                                append_summary
+                            )
+                        );
                         if let Err(error) = transcribe_audio_file(&path, &to) {
                             error!("Error transcribing audio: {error:?}");
                         }
@@ -78,17 +108,39 @@ fn listen(input: PathBuf, output: PathBuf, output_format: &str) -> notify::Resul
     Ok(())
 }
 
-fn reformat_filename(filename: &Path, output_format: &str) -> String {
-    if let Some(date_time) = get_earliest_file_date(filename) {
-        let extension = filename
-            .extension()
-            .and_then(|s| s.to_str())
-            .map(|ext| format!(".{}", ext))
-            .unwrap_or_default();
-        format!("{}{}", date_time.format(output_format), extension)
-    } else {
-        filename.to_str().unwrap().to_string()
+fn reformat_filename(
+    filename: &Path,
+    replace_filename: bool,
+    append_timestamp: bool,
+    timestamp_format: &str,
+    append_summary: bool
+) -> String {
+    let extension = filename
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|ext| format!(".{}", ext))
+        .unwrap_or_default();
+
+    let default_stem = filename
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default()
+        .to_string();
+
+    let mut new_filename = if replace_filename { "".to_string() } else { default_stem.clone() };
+
+    if append_timestamp || replace_filename {
+        if let Some(date_time) = get_earliest_file_date(filename) {
+            new_filename += &format!("_{}", date_time.format(timestamp_format));
+        }
     }
+
+    if append_summary || replace_filename {
+        // TODO: Actual summary
+        new_filename += "_summary";
+    }
+
+    new_filename + &extension
 }
 
 fn transcribe_audio_file(input: &Path, output: &Path) -> Result<(), String> {
