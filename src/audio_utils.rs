@@ -1,5 +1,5 @@
 use std::{ ffi::OsStr, path::Path };
-use crate::debug;
+use crate::{ debug, error::AppError };
 
 pub enum AudioFormat {
     MP3,
@@ -27,7 +27,7 @@ pub fn is_supported_audio_format(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-pub fn transcribe_audio(input: &Path, output: &Path) -> Result<(), String> {
+pub fn transcribe_audio(input: &Path, output: &Path) -> Result<(), AppError> {
     // TODO: Actual call to audio processing library
     debug!("Transcribing file from {:?} to {:?}", input, output);
     Ok(())

@@ -1,7 +1,10 @@
-use std::{ fs::rename, path::PathBuf };
+use error::AppError;
 use notify::{ Config, RecommendedWatcher, RecursiveMode, Watcher };
+use std::{ fs::rename, path::PathBuf };
+
 mod audio_utils;
 mod cli;
+mod error;
 mod file_ops;
 mod logging;
 
@@ -32,47 +35,52 @@ fn listen(
     append_timestamp: bool,
     timestamp_format: &str,
     append_summary: bool
-) -> notify::Result<()> {
-    if let Err(error) = std::fs::create_dir_all(&input) {
-        error!("Error creating source directory: {error:?}");
-    }
+) -> Result<(), AppError> {
+    std::fs::create_dir_all(&input).map_err(AppError::FileSystemError)?;
 
-    let (tx, rx) = std::sync::mpsc::channel();
-    let mut event_watcher = RecommendedWatcher::new(tx, Config::default())?;
+    let (handler, receiver) = std::sync::mpsc::channel();
+    let mut event_watcher = RecommendedWatcher::new(handler, Config::default()).map_err(
+        AppError::NotifyError
+    )?;
     event_watcher.watch(&input, RecursiveMode::NonRecursive)?;
 
-    for res in rx {
-        match res {
-            Ok(event) => {
-                debug!("Change: {event:?}");
-                for path in event.paths {
-                    if path.exists() && audio_utils::is_supported_audio_format(path.as_path()) {
-                        let to = output.join(
-                            file_ops::modify_filename(
-                                &path,
-                                replace_filename,
-                                append_timestamp,
-                                timestamp_format,
-                                append_summary
-                            )
-                        );
-                        if let Err(error) = audio_utils::transcribe_audio(&path, &to) {
-                            error!("Error transcribing audio: {error:?}");
-                        }
-                        debug!("Moving {path:?} to {to:?}");
-                        if let Err(error) = std::fs::create_dir_all(&output) {
-                            error!("Error creating directory: {error:?}");
-                        }
-                        if let Err(error) = rename(path, to) {
-                            error!("Error renaming: {error:?}");
-                            continue;
-                        }
-                    }
-                }
-            }
-            Err(error) => error!("Error: {error:?}"),
-        }
+    for event in receiver {
+        handle_event(
+            event?,
+            &output,
+            replace_filename,
+            append_timestamp,
+            timestamp_format,
+            append_summary
+        )?;
     }
 
+    Ok(())
+}
+
+fn handle_event(
+    event: notify::Event,
+    output: &PathBuf,
+    replace_filename: bool,
+    append_timestamp: bool,
+    timestamp_format: &str,
+    append_summary: bool
+) -> Result<(), error::AppError> {
+    debug!("Handling event: {:?}", event);
+    for path in event.paths {
+        if path.exists() && audio_utils::is_supported_audio_format(path.as_path()) {
+            let to = output.join(
+                file_ops::modify_filename(
+                    &path,
+                    replace_filename,
+                    append_timestamp,
+                    timestamp_format,
+                    append_summary
+                )?
+            );
+            audio_utils::transcribe_audio(&path, &to)?;
+            file_ops::move_file(&path, &to)?;
+        }
+    }
     Ok(())
 }
